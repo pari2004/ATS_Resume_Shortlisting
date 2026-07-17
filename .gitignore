@@ -1,0 +1,25 @@
+# Secrets
+.env
+credentials/
+*.json.key
+token.json
+client_secrets.json
+pydrive2_credentials.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# App data / generated output
+Applicants.xlsx
+shortlisting_report.xlsx
+import_report_*.xlsx
+shortlisted/
+logs/
+*.log
+drive_live_test_output.txt
+package-lock.json
+
+# Claude Code session state
+.claude/
