@@ -18,7 +18,7 @@ import pdfplumber
 import pytesseract
 from pdf2image import convert_from_path
 
-from skills_taxonomy import SKILLS_TAXONOMY_SORTED
+import domain_taxonomy
 
 try:
     import phonenumbers
@@ -120,7 +120,12 @@ def extract_text(file_bytes: bytes, filename: str, staging_dir: Path) -> Tuple[s
     no usable text could be pulled out at all (caller should count this file
     as Failed but keep processing the rest of the batch)."""
     ext = Path(filename).suffix.lower()
-    tmp_path = staging_dir / filename
+    # A filename containing "/" or "\" (rare, but possible from an upload or
+    # an unusual Drive file name) would otherwise be interpreted as a
+    # sub-path and crash when staged to disk -- flatten it to a single
+    # path segment.
+    safe_filename = re.sub(r"[\\/]+", "_", filename)
+    tmp_path = staging_dir / safe_filename
 
     if ext == ".pdf":
         text, is_scanned = extract_text_from_pdf_bytes(file_bytes, tmp_path)
@@ -164,17 +169,33 @@ _DATE_RANGE_RE = re.compile(
     rf"(?:(?:({_MONTHS})[a-z]*\.?\s*)?(\d{{4}})|present|current)",
     re.IGNORECASE,
 )
+# Numeric equivalent, e.g. "06/2025 - 07/2025" or "03/2023 - Present" --
+# common on internship-heavy/early-career resumes that skip month names.
+_NUMERIC_DATE_RANGE_RE = re.compile(
+    r"(\d{1,2})/(\d{4})\s*(?:-|to|–|—)\s*(?:(\d{1,2})/(\d{4})|present|current)",
+    re.IGNORECASE,
+)
+# Last-resort fallback when no date range is found at all -- a bare stated
+# duration like "(5 months)" or "2 months" with no calendar dates, common on
+# resumes that list internship durations without start/end dates.
+_DURATION_PHRASE_RE = re.compile(
+    r"(\d+)\s*\+?\s*years?(?:\s+(\d+)\s*months?)?|(\d+)\s*\+?\s*months?",
+    re.IGNORECASE,
+)
 
 _SECTION_ALIASES = {
     "skills": ["skills", "technical skills", "core competencies", "key skills"],
     "experience": [
         "experience", "work experience", "professional experience",
-        "employment history", "work history",
+        "employment history", "work history", "internship experience",
+        "internships", "internship",
     ],
     "education": ["education", "academic background", "academic qualifications"],
     "certifications": ["certifications", "certificates", "licenses"],
     "projects": ["projects", "personal projects", "academic projects"],
     "summary": ["summary", "objective", "profile", "about"],
+    "languages": ["languages", "language proficiency", "languages known"],
+    "achievements": ["achievements", "accomplishments", "awards", "honors"],
 }
 
 
@@ -406,13 +427,11 @@ def _extract_name(filename: str, text: str) -> str:
 
 
 def _extract_skills(text: str, skills_section: str) -> List[str]:
-    haystack = (skills_section + "\n" + text).lower()
-    found = []
-    for skill in SKILLS_TAXONOMY_SORTED:
-        pattern = r"(?<![a-z0-9])" + re.escape(skill) + r"(?![a-z0-9])"
-        if re.search(pattern, haystack):
-            found.append(skill)
-    return sorted(set(found))
+    """Domain-independent: pulls verbatim items straight out of a labeled
+    Skills section first (works for any domain, not just what's in the
+    taxonomy), unioned with taxonomy cross-references over the full text.
+    See domain_taxonomy.extract_skill_phrases for the layered strategy."""
+    return domain_taxonomy.extract_skill_phrases(text)
 
 
 def _parse_list_section(block: str) -> List[str]:
@@ -452,7 +471,30 @@ def _extract_experience_entries(experience_section: str) -> List[dict]:
             "end_month": _month_to_num(end_month) if end_month else datetime.now().month,
             "is_current": is_current,
         })
+    for match in _NUMERIC_DATE_RANGE_RE.finditer(experience_section):
+        start_month, start_year, end_month, end_year = match.groups()
+        end_label = match.group(0).lower()
+        is_current = "present" in end_label or "current" in end_label
+        entries.append({
+            "raw": match.group(0),
+            "start_year": int(start_year),
+            "start_month": int(start_month),
+            "end_year": int(end_year) if end_year else datetime.now().year,
+            "end_month": int(end_month) if end_month else datetime.now().month,
+            "is_current": is_current,
+        })
     return entries
+
+
+def _sum_duration_phrases(text: str) -> float:
+    total_months = 0
+    for match in _DURATION_PHRASE_RE.finditer(text):
+        years, months_combo, months_alone = match.groups()
+        if years is not None:
+            total_months += int(years) * 12 + (int(months_combo) if months_combo else 0)
+        elif months_alone is not None:
+            total_months += int(months_alone)
+    return round(total_months / 12.0, 1) if total_months else 0.0
 
 
 def _total_experience_years(text: str, experience_section: str) -> float:
@@ -468,6 +510,14 @@ def _total_experience_years(text: str, experience_section: str) -> float:
     match = _YEARS_EXPERIENCE_RE.search(text)
     if match:
         return float(match.group(1))
+
+    # Last resort: resumes that state a bare duration ("2 months", "(5
+    # months)") instead of calendar dates -- scoped to the experience
+    # section (falls back to the whole resume if no section was found) to
+    # limit false positives from unrelated year/month mentions elsewhere.
+    duration_years = _sum_duration_phrases(experience_section)
+    if duration_years > 0:
+        return duration_years
 
     return 0.0
 
@@ -521,6 +571,8 @@ class ParsedResume:
     education: List[str] = field(default_factory=list)
     certifications: List[str] = field(default_factory=list)
     projects: List[str] = field(default_factory=list)
+    languages: List[str] = field(default_factory=list)
+    achievements: List[str] = field(default_factory=list)
     linkedin: str = ""
     github: str = ""
     portfolio: str = ""
@@ -557,6 +609,8 @@ def parse_resume(text: str, filename: str, is_scanned: bool = False) -> ParsedRe
         education=_parse_list_section(sections.get("education", "")),
         certifications=_parse_list_section(sections.get("certifications", "")),
         projects=_parse_list_section(sections.get("projects", "")),
+        languages=_parse_list_section(sections.get("languages", "")),
+        achievements=_parse_list_section(sections.get("achievements", "")),
         linkedin=linkedin,
         github=github,
         portfolio=_extract_portfolio(text, linkedin, github),

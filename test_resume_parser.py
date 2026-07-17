@@ -118,6 +118,23 @@ class TestParseResume(unittest.TestCase):
         for skill in ["python", "sql", "aws", "docker", "react"]:
             self.assertIn(skill, self.parsed.skills)
 
+    def test_non_taxonomy_skill_found_verbatim_in_skills_section(self):
+        text = "Someone\nsomeone@example.com\nSkills\nGST, Tally, Bank Reconciliation\n"
+        parsed = resume_parser.parse_resume(text, "resume.pdf")
+        self.assertIn("gst", parsed.skills)
+        self.assertIn("tally", parsed.skills)
+        self.assertIn("bank reconciliation", parsed.skills)
+
+    def test_languages_section_parsed(self):
+        text = "Someone\nsomeone@example.com\nLanguages\nEnglish\nHindi\nSpanish\n"
+        parsed = resume_parser.parse_resume(text, "resume.pdf")
+        self.assertEqual(parsed.languages, ["English", "Hindi", "Spanish"])
+
+    def test_achievements_section_parsed(self):
+        text = "Someone\nsomeone@example.com\nAchievements\nEmployee of the Month, 2024\nTop Sales Performer\n"
+        parsed = resume_parser.parse_resume(text, "resume.pdf")
+        self.assertTrue(any("Employee of the Month" in a for a in parsed.achievements))
+
     def test_education_found(self):
         self.assertTrue(any("Tech University" in e for e in self.parsed.education))
 
@@ -244,6 +261,61 @@ class TestNameExtractionEdgeCases(unittest.TestCase):
         text = "RohitBande\nFrontend Developer (ReactJS & NextJS)\nsomeone@example.com"
         parsed = resume_parser.parse_resume(text, "Resume_2026_july.pdf")
         self.assertEqual(parsed.name, "Unknown")
+
+
+class TestExperienceExtractionEdgeCases(unittest.TestCase):
+    """Regression tests for real gaps found on non-tech (BDA/sales) resumes:
+    numeric MM/YYYY date ranges and bare duration phrases with no calendar
+    dates at all, both of which previously computed to 0.0 years."""
+
+    def test_numeric_month_year_date_range_is_parsed(self):
+        text = "\n".join([
+            "Someone Person",
+            "Internship",
+            "ABC Company - Accountant",
+            "Patna - 06/2025 - 07/2025",
+        ])
+        parsed = resume_parser.parse_resume(text, "resume.pdf")
+        self.assertGreater(parsed.total_experience_years, 0)
+
+    def test_numeric_date_range_to_present_is_parsed(self):
+        text = "\n".join([
+            "Someone Person",
+            "Experience",
+            "Company X - Analyst",
+            "03/2023 - Present",
+        ])
+        parsed = resume_parser.parse_resume(text, "resume.pdf")
+        self.assertGreater(parsed.total_experience_years, 0)
+
+    def test_bare_months_duration_with_no_dates_is_parsed(self):
+        text = "\n".join([
+            "Someone Person",
+            "Experience",
+            "Accounts Intern, Some Stadium (5 months)",
+            "- Assisted in filing and documentation.",
+        ])
+        parsed = resume_parser.parse_resume(text, "resume.pdf")
+        self.assertAlmostEqual(parsed.total_experience_years, 0.4, delta=0.05)
+
+    def test_bare_duration_without_parens_is_parsed(self):
+        text = "\n".join([
+            "Someone Person",
+            "Internship Experience",
+            "Company Name: Project Title: Duration:",
+            "Some Company Trainee 2 months",
+        ])
+        parsed = resume_parser.parse_resume(text, "resume.pdf")
+        self.assertAlmostEqual(parsed.total_experience_years, 0.2, delta=0.05)
+
+    def test_explicit_years_and_months_duration_is_parsed(self):
+        text = "\n".join([
+            "Someone Person",
+            "Experience",
+            "Worked as an analyst for 1 year 3 months at Some Firm.",
+        ])
+        parsed = resume_parser.parse_resume(text, "resume.pdf")
+        self.assertAlmostEqual(parsed.total_experience_years, 1.25, delta=0.06)
 
 
 if __name__ == "__main__":

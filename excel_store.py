@@ -30,10 +30,12 @@ COLUMNS = [
     "Phone",
     "Experience",
     "Skills",
+    "Detected Job Domain",
     "Education",
     "ATS Score",
     "Skill Match %",
     "Experience Match %",
+    "Matched Skills",
     "Missing Skills",
     "Recommendation",
     "Status",
@@ -136,17 +138,19 @@ def upsert_candidate(
 ) -> Tuple[pd.DataFrame, pd.DataFrame, str]:
     """``record`` must contain keys matching COLUMNS except 'Candidate ID' and
     'Imported Time' (assigned/refreshed here). Returns (applicants, dedup,
-    action) where action is "inserted" / "updated" / "duplicate_skip"."""
+    action) where action is "inserted" / "updated" / "rescored".
+
+    An exact resume-hash match (the identical file already imported) still
+    refreshes the row rather than being skipped -- the resume content hasn't
+    changed, but the *scoring* (ATS Score, domain, matched/missing skills,
+    recommendation) depends on whatever Job Description this run is scoring
+    against, which may well be different from the JD used the first time
+    this file was imported. Skipping silently would leave stale scores from
+    a JD that's no longer relevant."""
     email = record.get("Email", "")
     phone = record.get("Phone", "")
 
     row_idx, reason = find_existing_candidate(applicants, dedup, email, phone, resume_hash)
-
-    if reason == "hash":
-        logger.info(
-            f"Duplicate skip (identical resume already imported): {record.get('Resume File Name')}"
-        )
-        return applicants, dedup, "duplicate_skip"
 
     record["Imported Time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -161,10 +165,12 @@ def upsert_candidate(
             [dedup, pd.DataFrame([{"Candidate ID": candidate_id, "Resume Hash": resume_hash}])],
             ignore_index=True,
         )
+        action = "rescored" if reason == "hash" else "updated"
         logger.info(
-            f"Updated candidate {candidate_id} ({reason} match): {record.get('Resume File Name')}"
+            f"{'Rescored' if action == 'rescored' else 'Updated'} candidate {candidate_id} "
+            f"({reason} match): {record.get('Resume File Name')}"
         )
-        return applicants, dedup, "updated"
+        return applicants, dedup, action
 
     candidate_id = _next_candidate_id(applicants)
     record["Candidate ID"] = candidate_id

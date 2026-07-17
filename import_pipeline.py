@@ -29,7 +29,7 @@ ProgressCallback = Callable[[int, int, str], None]
 @dataclass
 class FileOutcome:
     file_name: str
-    status: str  # "imported" | "updated" | "duplicate_skip" | "failed" | "skipped_unsupported"
+    status: str  # "imported" | "updated" | "rescored" | "failed" | "skipped_unsupported"
     reason: str = ""
     ats_score: Optional[float] = None
     processing_seconds: float = 0.0
@@ -40,7 +40,7 @@ class ImportReport:
     total_files: int = 0
     imported: int = 0
     updated: int = 0
-    duplicates_skipped: int = 0
+    rescored: int = 0
     failed: int = 0
     unsupported_skipped: int = 0
     drive_warnings: List[str] = field(default_factory=list)
@@ -51,7 +51,7 @@ class ImportReport:
 
     @property
     def processed(self) -> int:
-        return self.imported + self.updated + self.duplicates_skipped + self.failed
+        return self.imported + self.updated + self.rescored + self.failed
 
     @property
     def progress_pct(self) -> float:
@@ -78,7 +78,7 @@ def _process_one_file(
     dedup,
     file_meta: Dict[str, Dict[str, str]],
     staging_dir: Path,
-    use_semantic: bool,
+    weights: ats_scoring.ScoringWeights,
     shortlist_threshold: float,
     maybe_threshold: float,
 ):
@@ -95,11 +95,18 @@ def _process_one_file(
 
     parsed = resume_parser.parse_resume(text, filename, is_scanned=is_scanned)
     result = ats_scoring.score_resume(
-        parsed, jd, use_semantic=use_semantic,
+        parsed, jd, weights=weights,
         shortlist_threshold=shortlist_threshold, maybe_threshold=maybe_threshold,
     )
 
     meta = file_meta.get(filename, {})
+    matched_skills = result.matched_required_skills + result.matched_preferred_skills
+    # "Recommendation" stays exact-match filterable (Shortlist/Maybe/Reject
+    # as its own leading token) with the domain-aware sentence appended --
+    # dashboard filtering/counting splits on " - " to recover the tier.
+    recommendation_cell = result.recommendation
+    if result.recommendation_text:
+        recommendation_cell = f"{result.recommendation} - {result.recommendation_text}"
     record = {
         "Name": parsed.name,
         "Email": parsed.email,
@@ -108,12 +115,14 @@ def _process_one_file(
         + (f" ({parsed.current_designation} at {parsed.current_company})"
            if parsed.current_designation or parsed.current_company else ""),
         "Skills": ", ".join(parsed.skills),
+        "Detected Job Domain": jd.domain,
         "Education": "; ".join(parsed.education),
         "ATS Score": result.ats_score,
-        "Skill Match %": result.skill_match_pct,
+        "Skill Match %": result.required_skill_match_pct,
         "Experience Match %": result.experience_match_pct,
-        "Missing Skills": ", ".join(result.missing_skills),
-        "Recommendation": result.recommendation,
+        "Matched Skills": ", ".join(matched_skills),
+        "Missing Skills": ", ".join(result.missing_required_skills),
+        "Recommendation": recommendation_cell,
         "Status": "New",
         "Resume File Name": filename,
         "Google Drive File ID": meta.get("file_id", ""),
@@ -124,7 +133,7 @@ def _process_one_file(
         applicants, dedup, record, resume_hash=parsed.resume_hash
     )
     elapsed = time.time() - started
-    status_map = {"inserted": "imported", "updated": "updated", "duplicate_skip": "duplicate_skip"}
+    status_map = {"inserted": "imported", "updated": "updated", "rescored": "rescored"}
     outcome = FileOutcome(
         file_name=filename,
         status=status_map[action],
@@ -141,7 +150,7 @@ def run_import(
     applicants_path: str = "Applicants.xlsx",
     uploaded_files: Optional[Dict[str, bytes]] = None,
     progress_cb: Optional[ProgressCallback] = None,
-    use_semantic: bool = False,
+    weights: Optional[ats_scoring.ScoringWeights] = None,
     shortlist_threshold: float = ats_scoring.SHORTLIST_THRESHOLD,
     maybe_threshold: float = ats_scoring.MAYBE_THRESHOLD,
 ) -> ImportReport:
@@ -173,6 +182,7 @@ def run_import(
         progress_cb(0, report.total_files, "starting")
 
     applicants, dedup = excel_store.load_applicants(applicants_path)
+    weights = weights or ats_scoring.ScoringWeights()
 
     with tempfile.TemporaryDirectory() as staging_dir_str:
         staging_dir = Path(staging_dir_str)
@@ -180,7 +190,7 @@ def run_import(
             try:
                 applicants, dedup, outcome = _process_one_file(
                     filename, file_bytes, jd, applicants, dedup, file_meta,
-                    staging_dir, use_semantic, shortlist_threshold, maybe_threshold,
+                    staging_dir, weights, shortlist_threshold, maybe_threshold,
                 )
             except Exception as e:
                 logger.error(f"Unexpected error processing {filename}: {e}")
@@ -191,8 +201,8 @@ def run_import(
                 report.imported += 1
             elif outcome.status == "updated":
                 report.updated += 1
-            elif outcome.status == "duplicate_skip":
-                report.duplicates_skipped += 1
+            elif outcome.status == "rescored":
+                report.rescored += 1
             else:
                 report.failed += 1
 
@@ -205,7 +215,7 @@ def run_import(
     report.total_seconds = round(time.time() - run_start, 2)
     logger.info(
         f"Import complete: {report.imported} imported, {report.updated} updated, "
-        f"{report.duplicates_skipped} duplicate(s) skipped, {report.failed} failed, "
+        f"{report.rescored} rescored, {report.failed} failed, "
         f"{report.unsupported_skipped} unsupported, in {report.total_seconds}s"
     )
     return report

@@ -55,6 +55,22 @@ SKILLS_TAXONOMY = [
     "salesforce", "sap", "erp", "crm", "seo", "digital marketing",
     "content writing", "ui/ux", "ui design", "ux design", "figma",
     "adobe photoshop", "adobe illustrator",
+    # Sales / business development
+    "business development", "lead generation", "cold calling", "cold emailing",
+    "sales", "b2b sales", "b2c sales", "inside sales", "outside sales",
+    "field sales", "telesales", "channel sales", "outbound sales",
+    "inbound sales", "sales operations", "account management",
+    "client relationship management", "customer relationship management",
+    "relationship management", "negotiation", "sales strategy",
+    "sales pipeline", "sales forecasting", "prospecting", "market research",
+    "competitor analysis", "closing deals", "deal closing", "revenue growth",
+    "partnership development", "networking", "presentation skills",
+    "powerpoint", "ms office", "microsoft office", "tally", "tally erp",
+    "hubspot", "zoho crm", "pipedrive", "customer acquisition",
+    "customer retention", "upselling", "cross-selling", "kpi tracking",
+    "crm management", "b2b", "b2c", "consultative selling", "consultative sales",
+    "client acquisition", "vendor management", "key account management",
+    "sales presentations", "business strategy", "market analysis",
 ]
 
 # Longer/more-specific phrases must be checked before their substrings

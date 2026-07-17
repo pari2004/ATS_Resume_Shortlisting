@@ -13,6 +13,7 @@ __pycache__/
 
 # App data / generated output
 Applicants.xlsx
+Applicants_backup_*.xlsx
 shortlisting_report.xlsx
 import_report_*.xlsx
 shortlisted/

@@ -53,12 +53,19 @@ class TestExcelStore(unittest.TestCase):
         self.assertEqual(len(applicants), 2)
         self.assertEqual(applicants.iloc[1]["Candidate ID"], "CAND-0002")
 
-    def test_exact_resume_hash_duplicate_is_skipped(self):
+    def test_exact_resume_hash_duplicate_is_rescored_not_skipped(self):
+        """An identical resume file re-imported doesn't get silently
+        skipped -- it's refreshed (same candidate row, no duplicate row),
+        since a re-run may be scoring against a different job description
+        than the first import used."""
         applicants, dedup = es.load_applicants(self.path)
         applicants, dedup, _ = es.upsert_candidate(applicants, dedup, _record(), resume_hash="h1")
-        applicants, dedup, action = es.upsert_candidate(applicants, dedup, _record(), resume_hash="h1")
-        self.assertEqual(action, "duplicate_skip")
-        self.assertEqual(len(applicants), 1)
+        applicants, dedup, action = es.upsert_candidate(
+            applicants, dedup, _record(**{"ATS Score": 42}), resume_hash="h1"
+        )
+        self.assertEqual(action, "rescored")
+        self.assertEqual(len(applicants), 1)  # still one row, not a duplicate
+        self.assertEqual(applicants.iloc[0]["ATS Score"], "42")  # refreshed, not stale
 
     def test_same_email_different_hash_updates_existing_row(self):
         applicants, dedup = es.load_applicants(self.path)
@@ -110,11 +117,13 @@ class TestExcelStore(unittest.TestCase):
         self.assertEqual(reloaded.iloc[0]["Email"], "alice@example.com")
 
         # A follow-up run against the same file should still detect the
-        # exact-duplicate resume via the persisted dedup index.
+        # exact-duplicate resume via the persisted dedup index, and rescore
+        # it (not silently skip it) without creating a duplicate row.
         reloaded, reloaded_dedup, action = es.upsert_candidate(
             reloaded, reloaded_dedup, _record(), resume_hash="h1"
         )
-        self.assertEqual(action, "duplicate_skip")
+        self.assertEqual(action, "rescored")
+        self.assertEqual(len(reloaded), 1)
 
     def test_update_after_reload_accepts_numeric_values(self):
         """Regression test: pandas >= 3.0's dtype=str on read_excel produces a
