@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+import pandas as pd
+
 import ats_scoring
 import excel_store
 import resume_parser
@@ -153,10 +155,16 @@ def run_import(
     weights: Optional[ats_scoring.ScoringWeights] = None,
     shortlist_threshold: float = ats_scoring.SHORTLIST_THRESHOLD,
     maybe_threshold: float = ats_scoring.MAYBE_THRESHOLD,
+    replace_existing: bool = False,
 ) -> ImportReport:
     """Runs the full pipeline for either a Drive folder link or a pre-fetched
     dict of {filename: bytes} (e.g. from Streamlit's file uploader). Exactly
-    one of ``drive_link`` / ``uploaded_files`` should be given."""
+    one of ``drive_link`` / ``uploaded_files`` should be given.
+
+    ``replace_existing=True`` discards whatever is currently in
+    ``applicants_path`` before this run's candidates are added, so the saved
+    workbook ends up containing only this run's results instead of the usual
+    append/update-in-place history."""
     report = ImportReport(started_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
     run_start = time.time()
 
@@ -181,7 +189,11 @@ def run_import(
     if progress_cb:
         progress_cb(0, report.total_files, "starting")
 
-    applicants, dedup = excel_store.load_applicants(applicants_path)
+    if replace_existing:
+        applicants = pd.DataFrame(columns=excel_store.COLUMNS)
+        dedup = pd.DataFrame(columns=excel_store.DEDUP_COLUMNS)
+    else:
+        applicants, dedup = excel_store.load_applicants(applicants_path)
     weights = weights or ats_scoring.ScoringWeights()
 
     with tempfile.TemporaryDirectory() as staging_dir_str:

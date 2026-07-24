@@ -194,6 +194,13 @@ def _run_import_section(jd, weights, shortlist_threshold, maybe_threshold, uploa
     st.header("3. Run Import")
     can_run = bool(uploaded_files) or bool(drive_link and drive_link.strip())
 
+    replace_existing = st.checkbox(
+        "🔄 Replace existing data (clear Applicants.xlsx before this run)",
+        value=True,
+        help="On: this run's candidates become the entire database, old rows are discarded. "
+        "Off: this run's candidates are appended/merged into the existing database.",
+    )
+
     if st.button("🚀 Run Import & Scoring", disabled=not can_run):
         progress_bar = st.progress(0.0)
         status_text = st.empty()
@@ -218,6 +225,7 @@ def _run_import_section(jd, weights, shortlist_threshold, maybe_threshold, uploa
                 weights=weights,
                 shortlist_threshold=shortlist_threshold,
                 maybe_threshold=maybe_threshold,
+                replace_existing=replace_existing,
             )
 
         st.session_state.last_report = report
